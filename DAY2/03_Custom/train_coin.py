@@ -29,7 +29,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ============== 設定區 ==============
 BATCH_SIZE = 16          # 批次大小
 EPOCHS = 20              # 訓練輪數
-LEARNING_RATE = 0.001    # 學習率
+LEARNING_RATE = 0.002    # 學習率
 IMAGE_SIZE = 224         # 統一影像大小
 TRAIN_SPLIT = 0.8        # 訓練集比例
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

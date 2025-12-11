@@ -70,12 +70,16 @@ DAY2/
 │   ├── train.py           # 訓練腳本
 │   ├── predict.py         # 預測腳本
 │   └── download_sample_data.py  # 資料準備工具
-└── 03_Custom/              # 自訂義分類器
-    ├── train_coin.py       # 硬幣正反面訓練腳本
-    ├── predict_coin.py     # 硬幣預測腳本
-    └── dataset/            # 資料集目錄 (gitignore)
-        ├── heads/          # 硬幣正面圖片
-        └── tails/          # 硬幣反面圖片
+├── 03_Custom/              # 自訂義分類器
+│   ├── train_coin.py       # 硬幣正反面訓練腳本
+│   ├── predict_coin.py     # 硬幣預測腳本
+│   ├── capture_tool.py     # WebCam 資料蒐集工具
+│   └── dataset/            # 資料集目錄 (gitignore)
+│       ├── heads/          # 硬幣正面圖片
+│       └── tails/          # 硬幣反面圖片
+└── 04_ROI/                 # ROI 工具
+    ├── roi_tool.py         # ROI GUI 工具
+    └── roi_example.py      # ROI 命令列範例
 ```
 
 **注意**: `models/` 和 `dataset/` 目錄已加入 `.gitignore`，不會上傳至 GitHub。
@@ -378,6 +382,75 @@ CoinCNN
 | `models/coin_classifier.pth` | 訓練好的模型 |
 | `training_history.png` | 訓練曲線 |
 | `prediction_samples.png` | 預測範例 |
+
+---
+
+## 範例四：ROI 工具
+
+### 簡介
+
+ROI (Region of Interest) 是影像處理中常用的技術，用於指定感興趣區域進行處理。本工具提供 GUI 和命令列兩種方式操作。
+
+### 功能
+
+1. **ROI Mask** - 只保留指定區域，其他區域變黑
+2. **Inverse ROI Mask** - 遮蔽指定區域，保留其他區域
+3. **ROI 裁切** - 直接裁切指定區域
+
+### 方式 A：GUI 工具
+
+```bash
+cd DAY2/04_ROI
+python roi_tool.py
+```
+
+**操作步驟：**
+1. 點擊「載入圖片」選擇圖片
+2. 在圖片上用滑鼠拖曳選取 ROI 區域
+3. 或手動輸入 X, Y, W, H 參數
+4. 點擊「套用 ROI」查看結果
+5. 可儲存 ROI Mask / Inverse Mask / 裁切結果
+
+### 方式 B：命令列範例
+
+```bash
+cd DAY2/04_ROI
+
+# 使用示範圖片
+python roi_example.py
+
+# 指定圖片和 ROI 參數
+python roi_example.py --image path/to/image.jpg --x 100 --y 100 --w 200 --h 150
+
+# 儲存結果
+python roi_example.py --image path/to/image.jpg --x 100 --y 100 --w 200 --h 150 --save
+```
+
+### 核心程式碼範例
+
+```python
+import cv2
+import numpy as np
+
+# 載入圖片
+image = cv2.imread("image.jpg")
+h, w = image.shape[:2]
+
+# 定義 ROI 參數
+roi_x, roi_y, roi_w, roi_h = 100, 100, 200, 150
+
+# 建立 ROI Mask (保留 ROI 區域)
+mask = np.zeros((h, w), dtype=np.uint8)
+mask[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w] = 255
+roi_result = cv2.bitwise_and(image, image, mask=mask)
+
+# 建立 Inverse Mask (遮蔽 ROI 區域)
+inverse_mask = cv2.bitwise_not(mask)
+inverse_result = cv2.bitwise_and(image, image, mask=inverse_mask)
+
+# 裁切 ROI 區域
+cropped = image[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
+```
 
 ---
 

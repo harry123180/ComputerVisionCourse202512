@@ -12,7 +12,7 @@
 - 再次握拳 👊 = 確認選擇並關閉 Alt+Tab
 
 安裝套件:
-    pip install pyautogui mediapipe customtkinter opencv-python pillow
+    pip install pyautogui mediapipe customtkinter opencv-python pillow pygame
 
 需要先下載手勢辨識模型:
 https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task
@@ -24,9 +24,8 @@ from PIL import Image, ImageTk
 import cv2
 import threading
 import os
-import urllib.request
 import time
-from collections import deque
+from tkinter import messagebox
 
 # MediaPipe
 import mediapipe as mp
@@ -36,57 +35,21 @@ from mediapipe.tasks.python import vision
 # 鍵盤控制
 import pyautogui
 
+# 匯入自定義函數和常數
+from functions import (
+    CIRCLE_SIZE, EXPANDED_SIZE,
+    GESTURE_MAP, ACTION_MAP,
+    MODEL_PATH, MODEL_URL,
+    play_sound_async, set_volume, get_volume,
+    download_model, cleanup_sound, put_chinese_text
+)
+
 # 設定外觀
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# 尺寸設定
-CIRCLE_SIZE = 70          # 圓形按鈕直徑
-EXPANDED_SIZE = 500       # 展開後的正方形邊長 (加大以顯示事件)
-MARGIN = 20               # 距離螢幕邊緣的距離
-
-# 模型路徑
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(SCRIPT_DIR, "gesture_recognizer.task")
-MODEL_URL = "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task"
-
-# 手勢對照表
-GESTURE_MAP = {
-    "None": {"full": "無手勢", "short": "---"},
-    "Closed_Fist": {"full": "握拳 👊", "short": "👊"},
-    "Open_Palm": {"full": "張開手掌 🖐️", "short": "🖐️"},
-    "Pointing_Up": {"full": "指向上 ☝️", "short": "☝️"},
-    "Thumb_Down": {"full": "拇指向下 👎", "short": "👎"},
-    "Thumb_Up": {"full": "拇指向上 👍", "short": "👍"},
-    "Victory": {"full": "勝利 ✌️", "short": "✌️"},
-    "ILoveYou": {"full": "我愛你 🤟", "short": "🤟"},
-}
-
-# 動作事件對照表
-ACTION_MAP = {
-    "alt_tab_start": {"full": "🔄 Alt+Tab 啟動", "color": (0, 255, 255)},
-    "prev_window": {"full": "👍 上一個視窗", "color": (0, 255, 0)},
-    "next_window": {"full": "👎 下一個視窗", "color": (255, 128, 0)},
-    "confirm_select": {"full": "👊 確認選擇", "color": (0, 128, 255)},
-}
-
 # pyautogui 設定
-pyautogui.FAILSAFE = False  # 關閉安全模式 (避免滑鼠移到角落時中斷)
-
-
-def download_model():
-    """下載手勢辨識模型"""
-    if not os.path.exists(MODEL_PATH):
-        print(f"正在下載手勢辨識模型...")
-        print(f"URL: {MODEL_URL}")
-        try:
-            urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-            print(f"模型已下載至: {MODEL_PATH}")
-        except Exception as e:
-            print(f"下載失敗: {e}")
-            print("請手動下載模型並放到 DAY4 資料夾")
-            return False
-    return True
+pyautogui.FAILSAFE = False
 
 
 class FloatingBubble(ctk.CTk):
@@ -98,20 +61,17 @@ class FloatingBubble(ctk.CTk):
         self.webcam_running = False
         self.cap = None
         self.current_gesture = "None"
-        self.prev_gesture = "None"           # 上一幀的手勢
+        self.prev_gesture = "None"
         self.gesture_recognizer = None
 
         # 動作檢測狀態
-        self.current_action = None           # 當前觸發的動作
-        self.action_display_time = 0         # 動作顯示時間
-        self.action_display_duration = 1.0   # 動作顯示持續時間
+        self.current_action = None
+        self.action_display_time = 0
+        self.action_display_duration = 1.0
 
         # Alt+Tab 狀態機
-        self.alt_tab_active = False          # Alt+Tab 是否啟動中
-        self.ready_for_action = False        # 是否準備好接收下一個動作 (經過 None 手勢)
-
-        # 事件歷史記錄
-        self.event_history = deque(maxlen=5)  # 最近 5 個事件
+        self.alt_tab_active = False
+        self.ready_for_action = False
 
         # 移除標題欄
         self.overrideredirect(True)
@@ -170,42 +130,33 @@ class FloatingBubble(ctk.CTk):
         gesture = self.current_gesture
         prev = self.prev_gesture
 
-        # 檢測手勢變化 (從其他手勢變成當前手勢)
         gesture_changed = (gesture != prev)
 
         if not gesture_changed:
             return
 
-        # ===== 狀態機邏輯 =====
-
         # 狀態 1: Alt+Tab 未啟動
         if not self.alt_tab_active:
-            # 握拳 → 啟動 Alt+Tab
             if gesture == "Closed_Fist" and prev == "None":
                 self.start_alt_tab(current_time)
                 self.ready_for_action = False
 
         # 狀態 2: Alt+Tab 已啟動
         else:
-            # 變成無手勢 → 準備接收動作
             if gesture == "None":
                 self.ready_for_action = True
                 print("準備接收下一個動作...")
 
-            # 從無手勢變成其他手勢 → 執行動作
             elif self.ready_for_action and prev == "None":
                 if gesture == "Thumb_Up":
-                    # 上一個視窗
                     self.switch_prev_window(current_time)
                     self.ready_for_action = False
 
                 elif gesture == "Thumb_Down":
-                    # 下一個視窗
                     self.switch_next_window(current_time)
                     self.ready_for_action = False
 
                 elif gesture == "Closed_Fist":
-                    # 確認選擇
                     self.confirm_selection(current_time)
                     self.ready_for_action = False
 
@@ -214,7 +165,8 @@ class FloatingBubble(ctk.CTk):
         print("啟動 Alt+Tab")
         self.alt_tab_active = True
 
-        # 按下 Alt 並按一次 Tab
+        play_sound_async('fist')
+
         pyautogui.keyDown('alt')
         pyautogui.press('tab')
 
@@ -226,6 +178,8 @@ class FloatingBubble(ctk.CTk):
             return
 
         print("上一個視窗")
+        play_sound_async('tab')
+
         pyautogui.hotkey('shift', 'tab')
         self.trigger_action("prev_window", current_time)
 
@@ -235,14 +189,16 @@ class FloatingBubble(ctk.CTk):
             return
 
         print("下一個視窗")
+        play_sound_async('tab')
+
         pyautogui.press('tab')
         self.trigger_action("next_window", current_time)
 
     def confirm_selection(self, current_time):
         """確認選擇並關閉 Alt+Tab"""
         print("確認選擇")
+        play_sound_async('fist')
 
-        # 放開 Alt 鍵
         pyautogui.keyUp('alt')
         self.alt_tab_active = False
 
@@ -255,27 +211,21 @@ class FloatingBubble(ctk.CTk):
 
         action_info = ACTION_MAP.get(action_type, {})
         event_text = f"{action_info.get('full', action_type)}"
-
-        # 加入事件歷史
-        time_str = time.strftime("%H:%M:%S")
-        self.event_history.append(f"[{time_str}] {event_text}")
-
         print(f"觸發動作: {event_text}")
 
     def setup_circle_mode(self):
         """設定圓形按鈕模式"""
         self.is_expanded = False
 
-        # 清除所有子元件
         for widget in self.winfo_children():
             widget.destroy()
 
-        # 設定視窗大小和位置 (右下角)
-        x = self.screen_width - CIRCLE_SIZE - MARGIN
-        y = self.screen_height - CIRCLE_SIZE - MARGIN - 40
+        # 右下角位置
+        margin = 20
+        x = self.screen_width - CIRCLE_SIZE - margin
+        y = self.screen_height - CIRCLE_SIZE - margin - 40
         self.geometry(f"{CIRCLE_SIZE}x{CIRCLE_SIZE}+{x}+{y}")
 
-        # 建立圓形按鈕容器
         self.circle_frame = ctk.CTkFrame(
             self,
             width=CIRCLE_SIZE,
@@ -286,7 +236,6 @@ class FloatingBubble(ctk.CTk):
         self.circle_frame.pack(expand=True, fill='both')
         self.circle_frame.pack_propagate(False)
 
-        # 圓形按鈕上的手勢顯示
         self.circle_label = ctk.CTkLabel(
             self.circle_frame,
             text="---",
@@ -308,16 +257,15 @@ class FloatingBubble(ctk.CTk):
         self.circle_frame.bind('<Leave>', lambda e: self.circle_frame.configure(fg_color='#4a90d9'))
 
     def setup_expanded_mode(self):
-        """設定展開後的正方形視窗模式"""
+        """設定展開後的正方形視窗模式 (置中)"""
         self.is_expanded = True
 
-        # 清除所有子元件
         for widget in self.winfo_children():
             widget.destroy()
 
-        # 設定視窗大小和位置
-        x = self.screen_width - EXPANDED_SIZE - MARGIN
-        y = self.screen_height - EXPANDED_SIZE - MARGIN - 40
+        # 置中位置
+        x = (self.screen_width - EXPANDED_SIZE) // 2
+        y = (self.screen_height - EXPANDED_SIZE) // 2
         self.geometry(f"{EXPANDED_SIZE}x{EXPANDED_SIZE}+{x}+{y}")
 
         # 主容器
@@ -338,7 +286,6 @@ class FloatingBubble(ctk.CTk):
         self.title_bar.pack(fill='x', padx=10, pady=(10, 5))
         self.title_bar.pack_propagate(False)
 
-        # 標題文字
         self.title_label = ctk.CTkLabel(
             self.title_bar,
             text="🖐️ 手勢辨識 (Alt+Tab)",
@@ -346,7 +293,6 @@ class FloatingBubble(ctk.CTk):
         )
         self.title_label.pack(side='left', padx=10, pady=5)
 
-        # 關閉按鈕
         self.close_btn = ctk.CTkButton(
             self.title_bar,
             text="✕",
@@ -407,37 +353,45 @@ class FloatingBubble(ctk.CTk):
         )
         self.action_label.pack(pady=8)
 
-        # 事件歷史區域
-        self.history_frame = ctk.CTkFrame(
+        # 音量控制區域
+        volume_frame = ctk.CTkFrame(
             self.content_frame,
-            fg_color='#252540',
+            fg_color='#2d2d44',
             corner_radius=10
         )
-        self.history_frame.pack(fill='x', pady=5)
+        volume_frame.pack(fill='x', pady=5)
 
-        history_title = ctk.CTkLabel(
-            self.history_frame,
-            text="事件歷史",
+        volume_label = ctk.CTkLabel(
+            volume_frame,
+            text="🔊 音量",
             font=ctk.CTkFont(size=12),
-            text_color='#888888'
+            text_color='#aaaaaa'
         )
-        history_title.pack(anchor='w', padx=10, pady=(5, 0))
+        volume_label.pack(side='left', padx=10, pady=8)
 
-        self.history_text = ctk.CTkLabel(
-            self.history_frame,
-            text="尚無事件",
-            font=ctk.CTkFont(size=11),
-            text_color='#aaaaaa',
-            justify='left',
-            anchor='w'
+        self.volume_value_label = ctk.CTkLabel(
+            volume_frame,
+            text=f"{int(get_volume() * 100)}%",
+            font=ctk.CTkFont(size=12),
+            text_color='#00ff7f',
+            width=40
         )
-        self.history_text.pack(fill='x', padx=10, pady=(0, 5))
+        self.volume_value_label.pack(side='right', padx=10, pady=8)
+
+        self.volume_slider = ctk.CTkSlider(
+            volume_frame,
+            from_=0,
+            to=100,
+            number_of_steps=20,
+            command=self.on_volume_change
+        )
+        self.volume_slider.set(get_volume() * 100)
+        self.volume_slider.pack(side='right', padx=10, pady=8, fill='x', expand=True)
 
         # 控制區域
         control_frame = ctk.CTkFrame(self.content_frame, fg_color='transparent')
         control_frame.pack(fill='x', pady=5)
 
-        # Webcam 開關
         self.webcam_var = ctk.BooleanVar(value=self.webcam_running)
         self.webcam_switch = ctk.CTkSwitch(
             control_frame,
@@ -447,7 +401,6 @@ class FloatingBubble(ctk.CTk):
         )
         self.webcam_switch.pack(side='left', padx=10)
 
-        # 置頂開關
         self.topmost_var = ctk.BooleanVar(value=True)
         self.topmost_switch = ctk.CTkSwitch(
             control_frame,
@@ -468,20 +421,34 @@ class FloatingBubble(ctk.CTk):
         if self.webcam_running:
             return
 
-        self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            print("無法開啟攝影機")
-            return
+        try:
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                raise Exception("無法開啟攝影機")
 
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            # 測試讀取一幀
+            ret, _ = self.cap.read()
+            if not ret:
+                self.cap.release()
+                raise Exception("攝影機無法讀取畫面")
 
-        self.webcam_running = True
-        print("Webcam 已啟動")
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        # 啟動更新執行緒
-        self.update_thread = threading.Thread(target=self.webcam_loop, daemon=True)
-        self.update_thread.start()
+            self.webcam_running = True
+            print("Webcam 已啟動")
+
+            self.update_thread = threading.Thread(target=self.webcam_loop, daemon=True)
+            self.update_thread.start()
+
+        except Exception as e:
+            error_msg = f"攝影機錯誤: {str(e)}\n\n請確認:\n1. 攝影機已連接\n2. 沒有其他程式佔用攝影機\n3. 攝影機驅動已安裝"
+            print(error_msg)
+            self.cap = None
+            self.webcam_running = False
+
+            # 顯示錯誤訊息
+            self.after(100, lambda: messagebox.showerror("攝影機錯誤", error_msg))
 
     def stop_webcam(self):
         """停止 webcam"""
@@ -509,13 +476,9 @@ class FloatingBubble(ctk.CTk):
 
             current_time = time.time()
 
-            # 水平翻轉
             frame = cv2.flip(frame, 1)
-
-            # 轉換為 RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # 手勢辨識
             if self.gesture_recognizer is not None:
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
@@ -530,34 +493,25 @@ class FloatingBubble(ctk.CTk):
                 except Exception as e:
                     pass
 
-            # 處理手勢狀態機 (Alt+Tab 控制)
             self.process_gesture_state_machine(current_time)
-
-            # 更新上一幀手勢
             self.prev_gesture = self.current_gesture
 
-            # 檢查動作顯示是否過期
             if self.current_action and (current_time - self.action_display_time) > self.action_display_duration:
                 self.current_action = None
 
-            # 更新 UI (在主執行緒)
             self.after(0, self.update_gesture_display)
             self.after(0, self.update_action_display)
 
-            # 如果展開模式，更新影像
             if self.is_expanded:
                 self.after(0, lambda f=frame.copy(): self.update_video_display(f))
 
-            # 控制幀率
             cv2.waitKey(30)
 
     def update_gesture_display(self):
         """更新手勢顯示"""
         gesture_info = GESTURE_MAP.get(self.current_gesture, GESTURE_MAP["None"])
 
-        # 更新圓形按鈕 (如果存在)
         if hasattr(self, 'circle_label') and self.circle_label.winfo_exists():
-            # 如果有動作觸發，顯示動作
             if self.current_action:
                 short_action = {
                     "alt_tab_start": "🔄",
@@ -567,26 +521,22 @@ class FloatingBubble(ctk.CTk):
                 }.get(self.current_action, "---")
                 self.circle_label.configure(text=short_action)
             elif self.alt_tab_active:
-                # Alt+Tab 啟動中，顯示狀態
                 self.circle_label.configure(text="🔄")
             else:
                 self.circle_label.configure(text=gesture_info["short"])
 
-        # 更新圓形按鈕顏色 (根據 Alt+Tab 狀態)
         if hasattr(self, 'circle_frame') and self.circle_frame.winfo_exists():
             if self.alt_tab_active:
-                self.circle_frame.configure(fg_color='#e67e22')  # 橘色表示啟動中
+                self.circle_frame.configure(fg_color='#e67e22')
             else:
-                self.circle_frame.configure(fg_color='#4a90d9')  # 預設藍色
+                self.circle_frame.configure(fg_color='#4a90d9')
 
-        # 更新展開視窗 (如果存在)
         if hasattr(self, 'gesture_label') and self.gesture_label.winfo_exists():
             status = " [Alt+Tab 啟動中]" if self.alt_tab_active else ""
             self.gesture_label.configure(text=f"手勢: {gesture_info['full']}{status}")
 
     def update_action_display(self):
         """更新動作顯示"""
-        # 更新動作標籤
         if hasattr(self, 'action_label') and self.action_label.winfo_exists():
             if self.current_action:
                 action_info = ACTION_MAP.get(self.current_action, {})
@@ -600,14 +550,6 @@ class FloatingBubble(ctk.CTk):
                     text_color='#ffff00'
                 )
 
-        # 更新事件歷史
-        if hasattr(self, 'history_text') and self.history_text.winfo_exists():
-            if self.event_history:
-                history_str = "\n".join(list(self.event_history)[-5:])
-                self.history_text.configure(text=history_str)
-            else:
-                self.history_text.configure(text="尚無事件")
-
     def update_video_display(self, frame):
         """更新影像顯示"""
         if not hasattr(self, 'video_label') or not self.video_label.winfo_exists():
@@ -615,43 +557,16 @@ class FloatingBubble(ctk.CTk):
 
         h, w = frame.shape[:2]
 
-        # 繪製手勢文字
+        # 繪製手勢文字 (使用中文字體)
         gesture_info = GESTURE_MAP.get(self.current_gesture, GESTURE_MAP["None"])
-        cv2.putText(
-            frame,
-            gesture_info["full"],
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 255, 0),
-            2
-        )
+        frame = put_chinese_text(frame, gesture_info["full"], (10, 5), font_size=24, color=(0, 255, 0))
 
-        # 繪製 Alt+Tab 狀態
         if self.alt_tab_active:
-            cv2.putText(
-                frame,
-                "[Alt+Tab Active]",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 255),
-                2
-            )
+            frame = put_chinese_text(frame, "[Alt+Tab 啟動中]", (10, 35), font_size=20, color=(0, 255, 255))
 
-            # 繪製提示
-            tips = "Thumb Up=Prev | Thumb Down=Next | Fist=Confirm"
-            cv2.putText(
-                frame,
-                tips,
-                (10, h - 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (200, 200, 200),
-                1
-            )
+            tips = "👍上一個 | 👎下一個 | 👊確認"
+            frame = put_chinese_text(frame, tips, (10, h - 30), font_size=16, color=(200, 200, 200))
 
-        # 繪製動作文字 (如果有)
         if self.current_action:
             action_info = ACTION_MAP.get(self.current_action, {})
             action_text = action_info.get("full", "")
@@ -662,27 +577,14 @@ class FloatingBubble(ctk.CTk):
             cv2.rectangle(overlay, (w//4, h//3), (3*w//4, 2*h//3), (0, 0, 0), -1)
             cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
 
-            # 繪製動作文字
-            text_size = cv2.getTextSize(action_text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
-            text_x = (w - text_size[0]) // 2
-            text_y = h // 2 + text_size[1] // 2
-            cv2.putText(
-                frame,
-                action_text,
-                (text_x, text_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                action_color,
-                2
-            )
+            # 繪製動作文字 (置中)
+            text_x = w // 4 + 20
+            text_y = h // 2 - 15
+            frame = put_chinese_text(frame, action_text, (text_x, text_y), font_size=28, color=action_color)
 
-        # 調整大小
         frame = cv2.resize(frame, (EXPANDED_SIZE - 40, 200))
-
-        # BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # 轉換為 CTkImage
         image = Image.fromarray(frame_rgb)
         photo = ctk.CTkImage(light_image=image, dark_image=image, size=(EXPANDED_SIZE - 40, 200))
 
@@ -705,7 +607,6 @@ class FloatingBubble(ctk.CTk):
         """展開視窗"""
         if not self.is_expanded:
             self.setup_expanded_mode()
-            # 更新 webcam 開關狀態
             if hasattr(self, 'webcam_var'):
                 self.webcam_var.set(self.webcam_running)
 
@@ -732,17 +633,25 @@ class FloatingBubble(ctk.CTk):
         is_top = self.topmost_var.get()
         self.attributes('-topmost', is_top)
 
+    def on_volume_change(self, value):
+        """音量滑桿變更"""
+        set_volume(value / 100.0)
+
+        if hasattr(self, 'volume_value_label') and self.volume_value_label.winfo_exists():
+            self.volume_value_label.configure(text=f"{int(value)}%")
+
     def on_closing(self):
         """關閉視窗"""
-        # 確保釋放 Alt 鍵
         if self.alt_tab_active:
             pyautogui.keyUp('alt')
             self.alt_tab_active = False
         self.stop_webcam()
+        cleanup_sound()
         self.destroy()
 
 
 def main():
+    """主程式入口"""
     # 下載模型
     if not download_model():
         print("請手動下載模型後再執行")
